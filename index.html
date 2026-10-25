@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lava Lamp</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { background: #0a0a0f; margin: 0; }
+  canvas { display: block; }
+  input[type=range] { accent-color: #ef4444; }
+</style>
+</head>
+<body class="min-h-screen flex flex-col items-center text-gray-100">
+<h1 class="text-2xl font-bold text-red-400 mt-4 mb-2 tracking-wide">Lava Lamp Blob Physics</h1>
+<div class="flex flex-col md:flex-row gap-4 w-full max-w-4xl px-4 pb-4">
+  <div class="flex-1">
+    <canvas id="c" class="rounded-xl border border-red-900 shadow-2xl w-full"></canvas>
+  </div>
+  <div class="md:w-52 flex flex-col gap-4 bg-gray-900 rounded-xl p-4 border border-gray-700">
+    <div>
+      <label class="text-xs text-gray-400 uppercase tracking-wider">Color Palette</label>
+      <div class="flex flex-col gap-1 mt-2">
+        <button data-pal="lava" class="pal-btn bg-orange-700 hover:bg-orange-600 text-white text-xs py-1 rounded transition ring-2 ring-orange-400">Classic Lava</button>
+        <button data-pal="ocean" class="pal-btn bg-blue-700 hover:bg-blue-600 text-white text-xs py-1 rounded transition">Ocean Blue</button>
+        <button data-pal="neon" class="pal-btn bg-green-700 hover:bg-green-600 text-white text-xs py-1 rounded transition">Neon Green</button>
+      </div>
+    </div>
+    <div>
+      <label class="text-xs text-gray-400 uppercase tracking-wider">Viscosity</label>
+      <input type="range" id="viscosity" min="0.90" max="0.999" step="0.001" value="0.97" class="w-full mt-1">
+      <div class="flex justify-between text-xs text-gray-500 mt-1"><span>Thin</span><span>Thick</span></div>
+    </div>
+    <div>
+      <label class="text-xs text-gray-400 uppercase tracking-wider">Heat Intensity</label>
+      <input type="range" id="heat" min="0.1" max="2.0" step="0.05" value="0.8" class="w-full mt-1">
+    </div>
+    <div>
+      <label class="text-xs text-gray-400 uppercase tracking-wider">Blob Count</label>
+      <input type="range" id="blobCount" min="4" max="12" step="1" value="8" class="w-full mt-1">
+      <span id="blobCountVal" class="text-xs text-red-300">8</span>
+    </div>
+    <button id="resetBtn" class="bg-gray-700 hover:bg-gray-600 text-white text-sm py-2 rounded-lg transition">Reset Blobs</button>
+    <div class="border-t border-gray-700 pt-3 text-xs text-gray-500 space-y-1">
+      <p>Hot zone at bottom heats blobs → they rise</p>
+      <p>Cool zone at top cools blobs → they sink</p>
+    </div>
+  </div>
+</div>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+const PALETTES = {
+  lava: { base: [200, 40, 0], glow: [255, 120, 0], bg: [20, 5, 0], hot: [255, 80, 0], cool: [60, 10, 0] },
+  ocean: { base: [0, 60, 180], glow: [0, 180, 255], bg: [0, 5, 20], hot: [0, 150, 255], cool: [0, 20, 80] },
+  neon: { base: [0, 160, 40], glow: [60, 255, 80], bg: [0, 10, 5], hot: [100, 255, 60], cool: [0, 60, 20] },
+};
+let currentPal = PALETTES.lava;
+let paused = false;
+
+function resize() {
+  const w = canvas.parentElement.clientWidth;
+  canvas.width = w;
+  canvas.height = Math.min(window.innerHeight * 0.72, w * 1.4);
+}
+resize();
+window.addEventListener('resize', resize);
+
+let blobs = [];
+
+function makeBlob(i, total, W, H) {
+  const minR = W * 0.04, maxR = W * 0.10;
+  return {
+    x: W * 0.1 + Math.random() * W * 0.8,
+    y: H * 0.3 + Math.random() * H * 0.4,
+    r: minR + Math.random() * (maxR - minR),
+    vx: (Math.random() - 0.5) * 0.5,
+    vy: (Math.random() - 0.5) * 0.3,
+    temp: 0.3 + Math.random() * 0.4,
+  };
+}
+
+function resetBlobs() {
+  const W = canvas.width, H = canvas.height;
+  const count = parseInt(document.getElementById('blobCount').value);
+  blobs = Array.from({ length: count }, (_, i) => makeBlob(i, count, W, H));
+}
+
+function metafield(px, py) {
+  let sum = 0;
+  for (const b of blobs) {
+    const dx = px - b.x, dy = py - b.y;
+    const d2 = dx * dx + dy * dy;
+    sum += (b.r * b.r) / (d2 + 1e-4);
+  }
+  return sum;
+}
+
+function draw() {
+  const W = canvas.width, H = canvas.height;
+  const viscosity = parseFloat(document.getElementById('viscosity').value);
+  const heatIntensity = parseFloat(document.getElementById('heat').value);
+
+  ctx.fillStyle = `rgb(${currentPal.bg[0]},${currentPal.bg[1]},${currentPal.bg[2]})`;
+  ctx.fillRect(0, 0, W, H);
+
+  const hotZoneH = H * 0.12;
+  const coolZoneH = H * 0.10;
+  const grad = ctx.createLinearGradient(0, H - hotZoneH, 0, H);
+  grad.addColorStop(0, 'transparent');
+  grad.addColorStop(1, `rgba(${currentPal.hot[0]},${currentPal.hot[1]},${currentPal.hot[2]},0.35)`);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, H - hotZoneH, W, hotZoneH);
+
+  const coolGrad = ctx.createLinearGradient(0, 0, 0, coolZoneH);
+  coolGrad.addColorStop(0, `rgba(${currentPal.cool[0]},${currentPal.cool[1]},${currentPal.cool[2]},0.25)`);
+  coolGrad.addColorStop(1, 'transparent');
+  ctx.fillStyle = coolGrad;
+  ctx.fillRect(0, 0, W, coolZoneH);
+
+  const threshold = 0.85;
+  const gridStep = 4;
+  const [br, bg, bb] = currentPal.base;
+  const [gr, gg, gb] = currentPal.glow;
+
+  const imgData = ctx.createImageData(W, H);
+  const d = imgData.data;
+
+  for (let py = 0; py < H; py += gridStep) {
+    for (let px = 0; px < W; px += gridStep) {
+      const v = metafield(px, py);
+      if (v > threshold) {
+        const t = Math.min((v - threshold) / threshold, 1.0);
+        const r = br + (gr - br) * t;
+        const g2 = bg + (gg - bg) * t;
+        const b2 = bb + (gb - bb) * t;
+        const alpha = 200 + 55 * t;
+        for (let dy = 0; dy < gridStep && py + dy < H; dy++) {
+          for (let dx = 0; dx < gridStep && px + dx < W; dx++) {
+            const idx = ((py + dy) * W + (px + dx)) * 4;
+            d[idx] = r; d[idx+1] = g2; d[idx+2] = b2; d[idx+3] = alpha;
+          }
+        }
+      }
+    }
+  }
+  ctx.putImageData(imgData, 0, 0);
+
+  for (const b of blobs) {
+    const grd = ctx.createRadialGradient(b.x, b.y, 0, b.x, b.y, b.r * 1.5);
+    grd.addColorStop(0, `rgba(${gr},${gg},${gb},0.3)`);
+    grd.addColorStop(1, 'transparent');
+    ctx.fillStyle = grd;
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, b.r * 1.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  if (!paused) updateBlobs(W, H, viscosity, heatIntensity);
+
+  requestAnimationFrame(draw);
+}
+
+function updateBlobs(W, H, viscosity, heatIntensity) {
+  const hotZoneY = H * 0.85;
+  const coolZoneY = H * 0.12;
+  const dt = 1;
+
+  for (const b of blobs) {
+    if (b.y + b.r > hotZoneY) {
+      b.temp = Math.min(1.0, b.temp + 0.012 * heatIntensity * dt);
+    }
+    if (b.y - b.r < coolZoneY) {
+      b.temp = Math.max(0.0, b.temp - 0.010 * heatIntensity * dt);
+    }
+    b.temp += (0.5 - b.temp) * 0.0008 * dt;
+
+    const buoyancy = (b.temp - 0.5) * 0.18 * heatIntensity;
+    b.vy -= buoyancy * dt;
+    b.vy += 0.04 * dt;
+    b.vx += (Math.random() - 0.5) * 0.08;
+    b.vy += (Math.random() - 0.5) * 0.04;
+
+    b.vx *= viscosity;
+    b.vy *= viscosity;
+
+    const maxV = 2.5;
+    const spd = Math.sqrt(b.vx*b.vx + b.vy*b.vy);
+    if (spd > maxV) { b.vx *= maxV/spd; b.vy *= maxV/spd; }
+
+    b.x += b.vx * dt;
+    b.y += b.vy * dt;
+
+    if (b.x - b.r < 0) { b.x = b.r; b.vx = Math.abs(b.vx) * 0.6; }
+    if (b.x + b.r > W) { b.x = W - b.r; b.vx = -Math.abs(b.vx) * 0.6; }
+    if (b.y - b.r < 0) { b.y = b.r; b.vy = Math.abs(b.vy) * 0.6; }
+    if (b.y + b.r > H) { b.y = H - b.r; b.vy = -Math.abs(b.vy) * 0.6; }
+
+    for (const other of blobs) {
+      if (other === b) continue;
+      const dx = b.x - other.x, dy = b.y - other.y;
+      const d = Math.sqrt(dx*dx + dy*dy);
+      const minD = (b.r + other.r) * 0.7;
+      if (d < minD && d > 0.01) {
+        const force = (minD - d) / minD * 0.3;
+        b.vx += (dx / d) * force;
+        b.vy += (dy / d) * force;
+      }
+    }
+  }
+}
+
+document.querySelectorAll('.pal-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.pal-btn').forEach(b => b.classList.remove('ring-2', 'ring-orange-400', 'ring-blue-400', 'ring-green-400'));
+    const pal = btn.dataset.pal;
+    currentPal = PALETTES[pal];
+    const ringMap = { lava: 'ring-orange-400', ocean: 'ring-blue-400', neon: 'ring-green-400' };
+    btn.classList.add('ring-2', ringMap[pal]);
+  });
+});
+
+document.getElementById('blobCount').addEventListener('input', function() {
+  document.getElementById('blobCountVal').textContent = this.value;
+  resetBlobs();
+});
+
+document.getElementById('resetBtn').addEventListener('click', resetBlobs);
+
+resetBlobs();
+draw();
+</script>
+</body>
+</html>
